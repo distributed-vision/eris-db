@@ -44,7 +44,6 @@ func SignBytes(chainID string, o Signable) []byte {
 	if *err != nil {
 		PanicCrisis(err)
 	}
-
 	return buf.Bytes()
 }
 

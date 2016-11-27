@@ -28,6 +28,8 @@ import (
 	cmn "github.com/tendermint/go-common"
 	"github.com/tendermint/go-crypto"
 	tEvents "github.com/tendermint/go-events"
+	rpcCore "github.com/tendermint/tendermint/rpc/core"
+	wire "github.com/tendermint/go-wire"
 
 	"github.com/eris-ltd/eris-db/account"
 	core_types "github.com/eris-ltd/eris-db/core/types"
@@ -38,31 +40,37 @@ import (
 )
 
 type transactor struct {
-	chainID      string
-	eventSwitch  tEvents.Fireable
-	erisMint     *ErisMint
-	eventEmitter event.EventEmitter
-	txMtx        *sync.Mutex
+	chainID       string
+	eventSwitch   tEvents.Fireable
+	erisMint      *ErisMint
+	eventEmitter  event.EventEmitter
+	txMtx         *sync.Mutex
+	txBroadcaster func(tx txs.Tx) error
 }
 
 func newTransactor(chainID string, eventSwitch tEvents.Fireable,
-	erisMint *ErisMint, eventEmitter event.EventEmitter) *transactor {
-	txs := &transactor{
+	erisMint *ErisMint, eventEmitter event.EventEmitter,
+	txBroadcaster func(tx txs.Tx) error) *transactor {
+	return &transactor{
 		chainID,
 		eventSwitch,
 		erisMint,
 		eventEmitter,
 		&sync.Mutex{},
+		txBroadcaster,
 	}
-	return txs
 }
 
 // Run a contract's code on an isolated and unpersisted state
 // Cannot be used to create new contracts
+// NOTE: this function is used from 1337 and has sibling on 46657
+// in pipe.go
+// TODO: [ben] resolve incompatibilities in byte representation for 0.12.0 release
 func (this *transactor) Call(fromAddress, toAddress, data []byte) (
 	*core_types.Call, error) {
 
-	cache := this.erisMint.GetCheckCache() // XXX: DON'T MUTATE THIS CACHE (used internally for CheckTx)
+	st := this.erisMint.GetState()
+	cache := state.NewBlockCache(st) // XXX: DON'T MUTATE THIS CACHE (used internally for CheckTx)
 	outAcc := cache.GetAccount(toAddress)
 	if outAcc == nil {
 		return nil, fmt.Errorf("Account %X does not exist", toAddress)
@@ -73,22 +81,25 @@ func (this *transactor) Call(fromAddress, toAddress, data []byte) (
 	callee := toVMAccount(outAcc)
 	caller := &vm.Account{Address: cmn.LeftPadWord256(fromAddress)}
 	txCache := state.NewTxCache(cache)
-	st := this.erisMint.GetState() // for block height, time
+	gasLimit := st.GetGasLimit()
 	params := vm.Params{
 		BlockHeight: int64(st.LastBlockHeight),
 		BlockHash:   cmn.LeftPadWord256(st.LastBlockHash),
 		BlockTime:   st.LastBlockTime.Unix(),
-		GasLimit:    10000000,
+		GasLimit:    gasLimit,
 	}
 
 	vmach := vm.NewVM(txCache, params, caller.Address, nil)
 	vmach.SetFireable(this.eventSwitch)
-	gas := int64(1000000000)
+	gas := gasLimit
 	ret, err := vmach.Call(caller, callee, callee.Code, data, 0, &gas)
 	if err != nil {
 		return nil, err
 	}
-	return &core_types.Call{Return: hex.EncodeToString(ret)}, nil
+	gasUsed := gasLimit - gas
+	// here return bytes are hex encoded; on the sibling function
+	// they are not
+	return &core_types.Call{Return: hex.EncodeToString(ret), GasUsed: gasUsed}, nil
 }
 
 // Run the given code on an isolated and unpersisted state
@@ -103,26 +114,41 @@ func (this *transactor) CallCode(fromAddress, code, data []byte) (
 	caller := &vm.Account{Address: cmn.LeftPadWord256(fromAddress)}
 	txCache := state.NewTxCache(cache)
 	st := this.erisMint.GetState() // for block height, time
+	gasLimit := st.GetGasLimit()
 	params := vm.Params{
 		BlockHeight: int64(st.LastBlockHeight),
 		BlockHash:   cmn.LeftPadWord256(st.LastBlockHash),
 		BlockTime:   st.LastBlockTime.Unix(),
-		GasLimit:    10000000,
+		GasLimit:    gasLimit,
 	}
 
 	vmach := vm.NewVM(txCache, params, caller.Address, nil)
-	gas := int64(1000000000)
+	gas := gasLimit
 	ret, err := vmach.Call(caller, callee, code, data, 0, &gas)
 	if err != nil {
 		return nil, err
 	}
-	return &core_types.Call{Return: hex.EncodeToString(ret)}, nil
+	gasUsed := gasLimit - gas
+	// here return bytes are hex encoded; on the sibling function
+	// they are not
+	return &core_types.Call{Return: hex.EncodeToString(ret), GasUsed: gasUsed}, nil
 }
 
 // Broadcast a transaction.
 func (this *transactor) BroadcastTx(tx txs.Tx) (*txs.Receipt, error) {
+	//err := this.txBroadcaster(tx)
 
-	err := this.erisMint.BroadcastTx(tx)
+	buf := new(bytes.Buffer)
+	var n int
+	var err error
+	wire.WriteBinary(struct{ txs.Tx }{tx}, buf, &n, &err)
+
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = rpcCore.BroadcastTxSync(buf.Bytes())
+
 	if err != nil {
 		return nil, fmt.Errorf("Error broadcasting transaction: %v", err)
 	}
@@ -138,12 +164,6 @@ func (this *transactor) BroadcastTx(tx txs.Tx) (*txs.Receipt, error) {
 		}
 	}
 	return &txs.Receipt{txHash, createsContract, contractAddr}, nil
-}
-
-// Get all unconfirmed txs.
-func (this *transactor) UnconfirmedTxs() (*txs.UnconfirmedTxs, error) {
-	// TODO-RPC
-	return &txs.UnconfirmedTxs{}, nil
 }
 
 // Orders calls to BroadcastTx using lock (waits for response from core before releasing)
@@ -188,6 +208,7 @@ func (this *transactor) Transact(privKey, address, data []byte, gasLimit,
 
 	// Got ourselves a tx.
 	txS, errS := this.SignTx(tx, []*account.PrivAccount{pa})
+
 	if errS != nil {
 		return nil, errS
 	}
@@ -205,13 +226,24 @@ func (this *transactor) TransactAndHold(privKey, address, data []byte, gasLimit,
 	} else {
 		addr = address
 	}
-	wc := make(chan *txs.EventDataCall)
+	// We want non-blocking on the first event received (but buffer the value),
+	// after which we want to block (and then discard the value - see below)
+	wc := make(chan *txs.EventDataCall, 1)
 	subId := fmt.Sprintf("%X", rec.TxHash)
 	this.eventEmitter.Subscribe(subId, txs.EventStringAccCall(addr),
 		func(evt txs.EventData) {
-			event := evt.(txs.EventDataCall)
-			if bytes.Equal(event.TxID, rec.TxHash) {
-				wc <- &event
+			eventDataCall := evt.(txs.EventDataCall)
+			if bytes.Equal(eventDataCall.TxID, rec.TxHash) {
+				// Beware the contract of go-events subscribe is that we must not be
+				// blocking in an event callback when we try to unsubscribe!
+				// We work around this by using a non-blocking send.
+				select {
+				// This is a non-blocking send, but since we are using a buffered
+				// channel of size 1 we will always grab our first event even if we
+				// haven't read from the channel at the time we receive the first event.
+				case wc <- &eventDataCall:
+				default:
+				}
 			}
 		})
 
@@ -224,16 +256,110 @@ func (this *transactor) TransactAndHold(privKey, address, data []byte, gasLimit,
 	select {
 	case <-toChan:
 		rErr = fmt.Errorf("Transaction timed out. Hash: " + subId)
+		fmt.Println(rErr)
 	case e := <-wc:
 		timer.Stop()
 		if e.Exception != "" {
 			rErr = fmt.Errorf("Error when transacting: " + e.Exception)
+			fmt.Println(rErr)
 		} else {
 			ret = e
+			fmt.Println(ret)
 		}
 	}
 	this.eventEmitter.Unsubscribe(subId)
 	return ret, rErr
+}
+
+func (this *transactor) Send(privKey, toAddress []byte,
+	amount int64) (*txs.Receipt, error) {
+	var toAddr []byte
+	if len(toAddress) == 0 {
+		toAddr = nil
+	} else if len(toAddress) != 20 {
+		return nil, fmt.Errorf("To-address is not of the right length: %d\n",
+			len(toAddress))
+	} else {
+		toAddr = toAddress
+	}
+
+	if len(privKey) != 64 {
+		return nil, fmt.Errorf("Private key is not of the right length: %d\n",
+			len(privKey))
+	}
+
+	pk := &[64]byte{}
+	copy(pk[:], privKey)
+	this.txMtx.Lock()
+	defer this.txMtx.Unlock()
+	pa := account.GenPrivAccountFromPrivKeyBytes(privKey)
+	cache := this.erisMint.GetState()
+	acc := cache.GetAccount(pa.Address)
+	var sequence int
+	if acc == nil {
+		sequence = 1
+	} else {
+		sequence = acc.Sequence + 1
+	}
+
+	tx := txs.NewSendTx()
+
+	txInput := &txs.TxInput{
+		Address:  pa.Address,
+		Amount:   amount,
+		Sequence: sequence,
+		PubKey:   pa.PubKey,
+	}
+
+	tx.Inputs = append(tx.Inputs, txInput)
+
+	txOutput := &txs.TxOutput{toAddr, amount}
+
+	tx.Outputs = append(tx.Outputs, txOutput)
+
+	// Got ourselves a tx.
+	txS, errS := this.SignTx(tx, []*account.PrivAccount{pa})
+	if errS != nil {
+		return nil, errS
+	}
+	return this.BroadcastTx(txS)
+}
+
+func (this *transactor) SendAndHold(privKey, toAddress []byte,
+	amount int64) (*txs.Receipt, error) {
+	rec, tErr := this.Send(privKey, toAddress, amount)
+	if tErr != nil {
+		return nil, tErr
+	}
+
+	wc := make(chan *txs.SendTx)
+	subId := fmt.Sprintf("%X", rec.TxHash)
+
+	this.eventEmitter.Subscribe(subId, txs.EventStringAccOutput(toAddress),
+		func(evt txs.EventData) {
+			event := evt.(txs.EventDataTx)
+			tx := event.Tx.(*txs.SendTx)
+			wc <- tx
+		})
+
+	timer := time.NewTimer(300 * time.Second)
+	toChan := timer.C
+
+	var rErr error
+
+	pa := account.GenPrivAccountFromPrivKeyBytes(privKey)
+
+	select {
+	case <-toChan:
+		rErr = fmt.Errorf("Transaction timed out. Hash: " + subId)
+	case e := <-wc:
+		if bytes.Equal(e.Inputs[0].Address, pa.Address) && e.Inputs[0].Amount == amount {
+			timer.Stop()
+			this.eventEmitter.Unsubscribe(subId)
+			return rec, rErr
+		}
+	}
+	return nil, rErr
 }
 
 func (this *transactor) TransactNameReg(privKey []byte, name, data string,
@@ -287,6 +413,9 @@ func (this *transactor) SignTx(tx txs.Tx, privAccounts []*account.PrivAccount) (
 		callTx := tx.(*txs.CallTx)
 		callTx.Input.PubKey = privAccounts[0].PubKey
 		callTx.Input.Signature = privAccounts[0].Sign(this.chainID, callTx)
+		fmt.Printf("Tx: %v\n",string(account.SignBytes(this.chainID, callTx)))
+		sig := callTx.Input.Signature.(crypto.SignatureEd25519)
+		fmt.Printf("Signature: %v\n",sig[:])
 		break
 	case *txs.BondTx:
 		bondTx := tx.(*txs.BondTx)

@@ -1,6 +1,7 @@
 package: github.com/eris-ltd/eris-db
 import:
 - package: github.com/eris-ltd/eris-logger
+- package: github.com/eris-ltd/eris-keys
 - package: github.com/spf13/cobra
 - package: github.com/spf13/viper
 - package: github.com/tendermint/tendermint
@@ -15,4 +16,4 @@ import:
 - package: gopkg.in/fatih/set.v0
 - package: gopkg.in/tylerb/graceful.v1
 - package: golang.org/x/net/http2
-  version: master
+- package: github.com/eris-ltd/common

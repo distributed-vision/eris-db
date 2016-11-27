@@ -506,7 +506,7 @@ func ExecTx(blockCache *BlockCache, tx txs.Tx, runCall bool, evc events.Fireable
 					exception = err.Error()
 				}
 				evc.FireEvent(txs.EventStringAccInput(tx.Input.Address), txs.EventDataTx{tx, ret, exception})
-				evc.FireEvent(txs.EventStringAccOutput(tx.Address), txs.EventDataTx{tx, ret, exception})
+				evc.FireEvent(txs.EventStringAccOutput(tx.Address),txs.EventDataTx{tx, ret, exception})
 			}
 		} else {
 			// The mempool does not call txs until

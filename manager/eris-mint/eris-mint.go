@@ -18,14 +18,11 @@ package erismint
 
 import (
 	"bytes"
-	"encoding/hex"
 	"fmt"
 	"sync"
 
 	tendermint_events "github.com/tendermint/go-events"
-	rpcclient "github.com/tendermint/go-rpc/client"
 	wire "github.com/tendermint/go-wire"
-	ctypes "github.com/tendermint/tendermint/rpc/core/types"
 	tmsp "github.com/tendermint/tmsp/types"
 
 	log "github.com/eris-ltd/eris-logger"
@@ -49,10 +46,6 @@ type ErisMint struct {
 
 	evc  *tendermint_events.EventCache
 	evsw *tendermint_events.EventSwitch
-
-	// client to the tendermint core rpc
-	client *rpcclient.ClientURI
-	host   string // tendermint core endpoint
 
 	nTxs int // count txs in a block
 }
@@ -78,31 +71,6 @@ func (app *ErisMint) GetCheckCache() *sm.BlockCache {
 	return app.checkCache
 }
 
-func (app *ErisMint) SetHostAddress(host string) {
-	app.host = host
-	app.client = rpcclient.NewClientURI(host) //fmt.Sprintf("http://%s", host))
-}
-
-// Broadcast a tx to the tendermint core
-// NOTE: this assumes we know the address of core
-func (app *ErisMint) BroadcastTx(tx txs.Tx) error {
-	buf := new(bytes.Buffer)
-	var n int
-	var err error
-	wire.WriteBinary(struct{ txs.Tx }{tx}, buf, &n, &err)
-	if err != nil {
-		return err
-	}
-
-	params := map[string]interface{}{
-		"tx": hex.EncodeToString(buf.Bytes()),
-	}
-
-	var result ctypes.TMResult
-	_, err = app.client.Call("broadcast_tx_sync", params, &result)
-	return err
-}
-
 func NewErisMint(s *sm.State, evsw *tendermint_events.EventSwitch) *ErisMint {
 	return &ErisMint{
 		state:      s,
@@ -124,8 +92,7 @@ func (app *ErisMint) SetOption(key string, value string) (log string) {
 }
 
 // Implements manager/types.Application
-func (app *ErisMint) AppendTx(txBytes []byte) (res tmsp.Result) {
-
+func (app *ErisMint) AppendTx(txBytes []byte) tmsp.Result {
 	app.nTxs += 1
 
 	// XXX: if we had tx ids we could cache the decoded txs on CheckTx
@@ -149,7 +116,7 @@ func (app *ErisMint) AppendTx(txBytes []byte) (res tmsp.Result) {
 }
 
 // Implements manager/types.Application
-func (app *ErisMint) CheckTx(txBytes []byte) (res tmsp.Result) {
+func (app *ErisMint) CheckTx(txBytes []byte) tmsp.Result {
 	var n int
 	var err error
 	tx := new(txs.Tx)
@@ -160,6 +127,9 @@ func (app *ErisMint) CheckTx(txBytes []byte) (res tmsp.Result) {
 	}
 
 	// TODO: map ExecTx errors to sensible TMSP error codes
+	buf = new(bytes.Buffer)
+	(*tx).WriteSignBytes(app.state.ChainID, buf, &n, &err)
+
 	err = sm.ExecTx(app.checkCache, *tx, false, nil)
 	if err != nil {
 		return tmsp.NewError(tmsp.CodeType_InternalError, fmt.Sprintf("Internal error: %v", err))

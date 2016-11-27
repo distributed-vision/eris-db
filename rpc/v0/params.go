@@ -80,6 +80,11 @@ type (
 		PrivAccounts []*account.PrivAccount `json:"priv_accounts"`
 	}
 
+	TxParam struct {
+		TxType           *txs.CallTx            `json:"tx"`
+		Tx []*account.PrivAccount `json:"priv_accounts"`
+	}
+
 	// Used when sending a transaction to be created and signed on the server
 	// (using the private key). This only uses the standard key type for now.
 	TransactParam struct {
@@ -88,6 +93,13 @@ type (
 		Address  []byte `json:"address"`
 		Fee      int64  `json:"fee"`
 		GasLimit int64  `json:"gas_limit"`
+	}
+
+	// Used when sending a 'Send' transaction.
+	SendParam struct {
+		PrivKey   []byte `json:"priv_key"`
+		ToAddress []byte `json:"to_address"`
+		Amount    int64  `json:"amount"`
 	}
 
 	NameRegEntryParam struct {

@@ -92,11 +92,13 @@ func GenPrivAccountFromPrivKeyBytes(privKeyBytes []byte) *PrivAccount {
 	if len(privKeyBytes) != 64 {
 		PanicSanity(Fmt("Expected 64 bytes but got %v", len(privKeyBytes)))
 	}
+
 	var privKeyArray [64]byte
 	copy(privKeyArray[:], privKeyBytes)
 	pubKeyBytes := ed25519.MakePublicKey(&privKeyArray)
 	pubKey := crypto.PubKeyEd25519(*pubKeyBytes)
 	privKey := crypto.PrivKeyEd25519(privKeyArray)
+
 	return &PrivAccount{
 		Address: pubKey.Address(),
 		PubKey:  pubKey,

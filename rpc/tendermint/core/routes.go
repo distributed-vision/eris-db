@@ -25,10 +25,11 @@ type TendermintRoutes struct {
 func (tmRoutes *TendermintRoutes) GetRoutes() map[string]*rpc.RPCFunc {
 	var routes = map[string]*rpc.RPCFunc{
 		"subscribe":               rpc.NewWSRPCFunc(tmRoutes.Subscribe, "event"),
-		"unsubscribe":             rpc.NewWSRPCFunc(tmRoutes.Unsubscribe, "event"),
+		"unsubscribe":             rpc.NewWSRPCFunc(tmRoutes.Unsubscribe, "subscriptionId"),
 		"status":                  rpc.NewRPCFunc(tmRoutes.StatusResult, ""),
 		"net_info":                rpc.NewRPCFunc(tmRoutes.NetInfoResult, ""),
 		"genesis":                 rpc.NewRPCFunc(tmRoutes.GenesisResult, ""),
+		"chain_id":                rpc.NewRPCFunc(tmRoutes.ChainIdResult, ""),
 		"get_account":             rpc.NewRPCFunc(tmRoutes.GetAccountResult, "address"),
 		"get_storage":             rpc.NewRPCFunc(tmRoutes.GetStorageResult, "address,key"),
 		"call":                    rpc.NewRPCFunc(tmRoutes.CallResult, "fromAddress,toAddress,data"),
@@ -38,16 +39,14 @@ func (tmRoutes *TendermintRoutes) GetRoutes() map[string]*rpc.RPCFunc {
 		"get_name":                rpc.NewRPCFunc(tmRoutes.GetNameResult, "name"),
 		"list_names":              rpc.NewRPCFunc(tmRoutes.ListNamesResult, ""),
 		"broadcast_tx":            rpc.NewRPCFunc(tmRoutes.BroadcastTxResult, "tx"),
+		"blockchain":              rpc.NewRPCFunc(tmRoutes.BlockchainInfo, "minHeight,maxHeight"),
+		"get_block":               rpc.NewRPCFunc(tmRoutes.GetBlock, "height"),
+		"list_unconfirmed_txs":    rpc.NewRPCFunc(tmRoutes.ListUnconfirmedTxs, ""),
+		"list_validators":         rpc.NewRPCFunc(tmRoutes.ListValidators, ""),
+		"dump_consensus_state":    rpc.NewRPCFunc(tmRoutes.DumpConsensusState, ""),
 		"unsafe/gen_priv_account": rpc.NewRPCFunc(tmRoutes.GenPrivAccountResult, ""),
 		"unsafe/sign_tx":          rpc.NewRPCFunc(tmRoutes.SignTxResult, "tx,privAccounts"),
-
-		// TODO: hookup
-		"blockchain": rpc.NewRPCFunc(tmRoutes.BlockchainInfo, "minHeight,maxHeight"),
-		//	"get_block":               rpc.NewRPCFunc(GetBlock, "height"),
-		//"list_validators":         rpc.NewRPCFunc(ListValidators, ""),
-		// "dump_consensus_state":    rpc.NewRPCFunc(DumpConsensusState, ""),
-		// "list_unconfirmed_txs":    rpc.NewRPCFunc(ListUnconfirmedTxs, ""),
-		// subscribe/unsubscribe are reserved for websocket events.
+		// TODO: [Silas] do we also carry forward "consensus_state" as in v0?
 	}
 	return routes
 }
@@ -61,8 +60,9 @@ func (tmRoutes *TendermintRoutes) Subscribe(wsCtx rpctypes.WSRPCContext,
 	// and return it in the result. This would require clients to hang on to a
 	// subscription id if they wish to unsubscribe, but then again they can just
 	// drop their connection
-	result, err := tmRoutes.tendermintPipe.Subscribe(wsCtx.GetRemoteAddr(), event,
+	result, err := tmRoutes.tendermintPipe.Subscribe(event,
 		func(result ctypes.ErisDBResult) {
+			wsCtx.GetRemoteAddr()
 			// NOTE: EventSwitch callbacks must be nonblocking
 			wsCtx.TryWriteRPCResponse(
 				rpctypes.NewRPCResponse(wsCtx.Request.ID+"#event", &result, ""))
@@ -75,9 +75,8 @@ func (tmRoutes *TendermintRoutes) Subscribe(wsCtx rpctypes.WSRPCContext,
 }
 
 func (tmRoutes *TendermintRoutes) Unsubscribe(wsCtx rpctypes.WSRPCContext,
-	event string) (ctypes.ErisDBResult, error) {
-	result, err := tmRoutes.tendermintPipe.Unsubscribe(wsCtx.GetRemoteAddr(),
-		event)
+	subscriptionId string) (ctypes.ErisDBResult, error) {
+	result, err := tmRoutes.tendermintPipe.Unsubscribe(subscriptionId)
 	if err != nil {
 		return nil, err
 	} else {
@@ -103,6 +102,14 @@ func (tmRoutes *TendermintRoutes) NetInfoResult() (ctypes.ErisDBResult, error) {
 
 func (tmRoutes *TendermintRoutes) GenesisResult() (ctypes.ErisDBResult, error) {
 	if r, err := tmRoutes.tendermintPipe.Genesis(); err != nil {
+		return nil, err
+	} else {
+		return r, nil
+	}
+}
+
+func (tmRoutes *TendermintRoutes) ChainIdResult() (ctypes.ErisDBResult, error) {
+	if r, err := tmRoutes.tendermintPipe.ChainId(); err != nil {
 		return nil, err
 	} else {
 		return r, nil
@@ -195,6 +202,7 @@ func (tmRoutes *TendermintRoutes) SignTxResult(tx txs.Tx,
 }
 
 func (tmRoutes *TendermintRoutes) BroadcastTxResult(tx txs.Tx) (ctypes.ErisDBResult, error) {
+  fmt.Println("---BroadcastTxResult---");
 	if r, err := tmRoutes.tendermintPipe.BroadcastTxSync(tx); err != nil {
 		return nil, err
 	} else {
@@ -211,5 +219,33 @@ func (tmRoutes *TendermintRoutes) BlockchainInfo(minHeight,
 	} else {
 		return r, nil
 	}
+}
 
+func (tmRoutes *TendermintRoutes) ListUnconfirmedTxs() (ctypes.ErisDBResult, error) {
+	// Get all Txs for now
+	r, err := tmRoutes.tendermintPipe.ListUnconfirmedTxs(-1)
+	if err != nil {
+		return nil, err
+	} else {
+		return r, nil
+	}
+}
+func (tmRoutes *TendermintRoutes) GetBlock(height int) (ctypes.ErisDBResult, error) {
+	r, err := tmRoutes.tendermintPipe.GetBlock(height)
+	if err != nil {
+		return nil, err
+	} else {
+		return r, nil
+	}
+}
+func (tmRoutes *TendermintRoutes) ListValidators() (ctypes.ErisDBResult, error) {
+	r, err := tmRoutes.tendermintPipe.ListValidators()
+	if err != nil {
+		return nil, err
+	} else {
+		return r, nil
+	}
+}
+func (tmRoutes *TendermintRoutes) DumpConsensusState() (ctypes.ErisDBResult, error) {
+	return tmRoutes.tendermintPipe.DumpConsensusState()
 }

@@ -33,14 +33,15 @@ type TendermintPipe interface {
 	// Subscribe attempts to subscribe the listener identified by listenerId to
 	// the event named event. The Event result is written to rpcResponseWriter
 	// which must be non-blocking
-	Subscribe(listenerId, event string,
+	Subscribe(event string,
 		rpcResponseWriter func(result rpc_tm_types.ErisDBResult)) (*rpc_tm_types.ResultSubscribe, error)
-	Unsubscribe(listenerId, event string) (*rpc_tm_types.ResultUnsubscribe, error)
+	Unsubscribe(subscriptionId string) (*rpc_tm_types.ResultUnsubscribe, error)
 
 	// Net
 	Status() (*rpc_tm_types.ResultStatus, error)
 	NetInfo() (*rpc_tm_types.ResultNetInfo, error)
 	Genesis() (*rpc_tm_types.ResultGenesis, error)
+	ChainId() (*rpc_tm_types.ResultChainId, error)
 
 	// Accounts
 	GetAccount(address []byte) (*rpc_tm_types.ResultGetAccount, error)
@@ -69,4 +70,10 @@ type TendermintPipe interface {
 
 	// Blockchain
 	BlockchainInfo(minHeight, maxHeight, maxBlockLookback int) (*rpc_tm_types.ResultBlockchainInfo, error)
+	ListUnconfirmedTxs(maxTxs int) (*rpc_tm_types.ResultListUnconfirmedTxs, error)
+	GetBlock(height int) (*rpc_tm_types.ResultGetBlock, error)
+
+	// Consensus
+	ListValidators() (*rpc_tm_types.ResultListValidators, error)
+	DumpConsensusState() (*rpc_tm_types.ResultDumpConsensusState, error)
 }
