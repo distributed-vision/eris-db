@@ -351,7 +351,7 @@ func (erisDbMethods *ErisDbMethods) BroadcastTx(request *rpc.RPCRequest, request
 		return nil, rpc.INVALID_PARAMS, err
 	}
 	receipt, errC := erisDbMethods.pipe.Transactor().BroadcastTx(param)
-
+	
 	if errC != nil {
 		return nil, rpc.INTERNAL_ERROR, errC
 	}

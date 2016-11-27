@@ -541,6 +541,7 @@ func (pipe *erisMintPipe) broadcastTx(tx txs.Tx,
 	callback func(res *tmsp_types.Response)) (*rpc_tm_types.ResultBroadcastTx, error) {
 
 	txBytes, err := txs.EncodeTx(tx)
+
 	if err != nil {
 		return nil, fmt.Errorf("Error encoding transaction: %v", err)
 	}
